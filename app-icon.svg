@@ -1,0 +1,38 @@
+<svg viewBox="0 0 512 512" width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vidflux-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="0.5" stop-color="#6EE7B7"/>
+      <stop offset="1" stop-color="#FBCFE8"/>
+    </linearGradient>
+    <linearGradient id="vidflux-play" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B0A0F"/>
+      <stop offset="1" stop-color="#1A1530"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect width="512" height="512" rx="128" fill="url(#vidflux-bg)"/>
+
+  <!-- Inner soft glow circle -->
+  <circle cx="256" cy="256" r="180" fill="#0B0A0F" opacity="0.06"/>
+
+  <!-- Video frame (rounded rectangle) -->
+  <rect x="140" y="160" width="232" height="192" rx="32"
+        fill="none" stroke="#0B0A0F" stroke-width="20"/>
+
+  <!-- Play triangle inside frame -->
+  <path d="M228 208 L312 256 L228 304 Z" fill="url(#vidflux-play)"/>
+
+  <!-- Conversion arrows (top-right, outgoing) -->
+  <path d="M390 190 A 70 70 0 0 1 420 256"
+        stroke="#0B0A0F" stroke-width="22" fill="none" stroke-linecap="round"/>
+  <path d="M420 256 L446 232 M420 256 L394 232"
+        stroke="#0B0A0F" stroke-width="22" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Conversion arrows (bottom-left, incoming) -->
+  <path d="M122 322 A 70 70 0 0 1 92 256"
+        stroke="#0B0A0F" stroke-width="22" fill="none" stroke-linecap="round"/>
+  <path d="M92 256 L66 280 M92 256 L118 280"
+        stroke="#0B0A0F" stroke-width="22" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

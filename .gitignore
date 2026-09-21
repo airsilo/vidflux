@@ -1,0 +1,42 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Updater signing keys NEVER COMMIT
+*.key
+*.key.pub
+.tauri/
+
+# Environment files
+.env
+.env.local
+
+# Local DB / test artifacts
+*.db
+test_output*
+src-tauri/binaries/*.exe

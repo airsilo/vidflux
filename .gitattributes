@@ -1,0 +1,21 @@
+# Normalize line endings
+* text=auto
+
+# Binary files — never convert
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.exe binary
+*.dll binary
+*.msi binary
+
+# Lock files
+package-lock.json -diff
+Cargo.lock -diff
