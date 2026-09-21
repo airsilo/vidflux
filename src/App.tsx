@@ -1080,6 +1080,24 @@ function App() {
     updateJob(id, { presetId, outputPath: newPath });
   }
 
+  async function handleApplyPresetToAllQueued() {
+  const queuedJobs = jobs.filter((j) => j.status === "queued");
+  if (queuedJobs.length === 0) return;
+
+  const preset = getPreset(defaultPresetId);
+  const taken: string[] = jobs
+    .filter((j) => j.status !== "queued" && j.status !== "cancelled")
+    .map((j) => j.outputPath);
+
+  // Recompute output paths to avoid collisions with each other and
+  // with already-completed jobs.
+  queuedJobs.forEach((job) => {
+    const newPath = computeOutputPath(job.inputPath, outputDir, preset.ext, taken);
+    taken.push(newPath);
+    updateJob(job.id, { presetId: defaultPresetId, outputPath: newPath });
+  });
+  }
+
   async function handleReveal(path: string) {
     if (!path) return;
     try { await revealItemInDir(path); } catch (e) { setError(`Could not reveal file: ${String(e)}`); }
@@ -1202,17 +1220,28 @@ function App() {
               <select id="preset" className="field-select" value={defaultPresetId}
                 onChange={(e) => setDefaultPresetId(e.target.value)}>
                 {groupPresets().map((group) => (
-                  <optgroup key={group.category} label={group.category}>
-                    {group.presets.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <div style={{ fontSize: "0.72rem", color: "var(--on-surface-variant)", marginTop: "4px" }}>
-                {preset.description}
-              </div>
-            </div>
+                <optgroup key={group.category} label={group.category}>
+        {group.presets.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </optgroup>
+    ))}
+  </select>
+  <div style={{ fontSize: "0.72rem", color: "var(--on-surface-variant)", marginTop: "4px" }}>
+    {preset.description}
+  </div>
+  {counts.queued > 0 && (
+    <button
+      className="btn btn-outlined"
+      style={{ width: "100%", justifyContent: "center", marginTop: "10px", padding: "8px 14px", minHeight: "auto" }}
+      onClick={handleApplyPresetToAllQueued}
+      title={`Apply "${preset.name}" to all ${counts.queued} queued file${counts.queued === 1 ? "" : "s"}`}
+    >
+      <span className="ms" style={{ fontSize: "16px" }}>playlist_add_check</span>
+      Apply to all queued ({counts.queued})
+    </button>
+  )}
+</div>
             <div className="field">
               <label className="field-label" htmlFor="outdir">Output folder</label>
               <div className="field-row">
