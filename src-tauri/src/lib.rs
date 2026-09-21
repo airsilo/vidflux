@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -8,6 +9,7 @@ use tauri_plugin_shell::ShellExt;
 #[derive(Default)]
 struct ConversionState {
     processes: Mutex<HashMap<String, CommandChild>>,
+    cancelled: Mutex<HashSet<String>>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -213,11 +215,9 @@ async fn detect_hardware_encoders(app: tauri::AppHandle) -> Result<serde_json::V
 }
 
 /* ============ friendly_ffmpeg_error ============ */
-/// Translate FFmpeg's stderr into a user-friendly error message.
 fn friendly_ffmpeg_error(stderr: &str, exit_code: Option<i32>) -> String {
     let s = stderr.to_lowercase();
 
-    // Corrupted / invalid input
     if s.contains("invalid data found when processing input")
         || s.contains("moov atom not found")
         || s.contains("could not find codec parameters")
@@ -226,7 +226,6 @@ fn friendly_ffmpeg_error(stderr: &str, exit_code: Option<i32>) -> String {
         return "File is corrupted or not a valid media file.".into();
     }
 
-    // File access
     if s.contains("no such file or directory")
         || s.contains("cannot open")
         || s.contains("error opening input")
@@ -246,7 +245,6 @@ fn friendly_ffmpeg_error(stderr: &str, exit_code: Option<i32>) -> String {
         return "Not enough disk space for the output file.".into();
     }
 
-    // Encoder problems
     if s.contains("unknown encoder")
         || s.contains("encoder not found")
         || s.contains("cannot load")
@@ -270,7 +268,6 @@ fn friendly_ffmpeg_error(stderr: &str, exit_code: Option<i32>) -> String {
         return "Invalid encoding settings. Try a different preset.".into();
     }
 
-    // Generic conversion failure
     if s.contains("conversion failed")
         || s.contains("nothing was written")
         || s.contains("could not open encoder")
@@ -285,7 +282,6 @@ fn friendly_ffmpeg_error(stderr: &str, exit_code: Option<i32>) -> String {
         return "Conversion was interrupted.".into();
     }
 
-    // Fallback with exit code
     match exit_code {
         Some(code) => format!("Conversion failed (error code {}). Try a different preset.", code),
         None => "Conversion failed unexpectedly. Try a different preset.".into(),
@@ -398,6 +394,29 @@ async fn start_conversion(
                     }
                 }
                 CommandEvent::Terminated(payload) => {
+                    // Check if this job was cancelled by the user.
+                    let was_cancelled = {
+                        let state = app_clone.state::<ConversionState>();
+                        let mut cancelled = state.cancelled.lock().unwrap();
+                        cancelled.remove(&job_id_clone)
+                    };
+
+                    // If cancelled, emit a "success" payload so the UI doesn't
+                    // show an error banner. The frontend already marked this
+                    // job as cancelled.
+                    if was_cancelled {
+                        let _ = app_clone.emit(
+                            "ffmpeg-complete",
+                            CompletePayload {
+                                job_id: job_id_clone.clone(),
+                                success: true,
+                                message: "Cancelled by user".to_string(),
+                                output_path: output_path_clone.clone(),
+                            },
+                        );
+                        break;
+                    }
+
                     let success = payload.code == Some(0);
                     let message = if success {
                         "Conversion complete".to_string()
@@ -405,7 +424,6 @@ async fn start_conversion(
                         friendly_ffmpeg_error(&stderr_buffer, payload.code)
                     };
 
-                    // Log raw stderr to the dev terminal for debugging
                     if !success {
                         eprintln!("[VidFlux] FFmpeg failed (exit {:?}):", payload.code);
                         let tail: Vec<&str> = stderr_buffer.lines().rev().take(12).collect();
@@ -426,6 +444,26 @@ async fn start_conversion(
                     break;
                 }
                 CommandEvent::Error(err) => {
+                    // Check if this job was cancelled first.
+                    let was_cancelled = {
+                        let state = app_clone.state::<ConversionState>();
+                        let mut cancelled = state.cancelled.lock().unwrap();
+                        cancelled.remove(&job_id_clone)
+                    };
+
+                    if was_cancelled {
+                        let _ = app_clone.emit(
+                            "ffmpeg-complete",
+                            CompletePayload {
+                                job_id: job_id_clone.clone(),
+                                success: true,
+                                message: "Cancelled by user".to_string(),
+                                output_path: output_path_clone.clone(),
+                            },
+                        );
+                        break;
+                    }
+
                     let _ = app_clone.emit(
                         "ffmpeg-complete",
                         CompletePayload {
@@ -451,6 +489,9 @@ async fn start_conversion(
 /* ============ cancel_conversion ============ */
 #[tauri::command]
 fn cancel_conversion(state: State<'_, ConversionState>, job_id: String) -> Result<(), String> {
+    // Mark as cancelled FIRST so the Terminated handler knows before FFmpeg exits.
+    state.cancelled.lock().unwrap().insert(job_id.clone());
+
     let mut procs = state.processes.lock().unwrap();
     if let Some(child) = procs.remove(&job_id) {
         child.kill().map_err(|e| e.to_string())?;

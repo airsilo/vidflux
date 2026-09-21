@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, message } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useQueueStore, QueueJob, CropMode } from "./store/queueStore";
 import { usePersistedState } from "./hooks/usePersistedState";
 import { APP_VERSION } from "./version";
 import "./index.css";
+
+/* ==================== MODULE-LEVEL CANCEL TRACKER ==================== */
+const CANCELLED_JOBS: Set<string> = new Set();
 
 /* ==================== TYPES ==================== */
 interface FfprobeStream {
@@ -571,6 +574,104 @@ function computeOutputPath(inputPath: string, outputDir: string, ext: string, ta
   return candidate;
 }
 
+/* ==================== CUSTOM TITLE BAR ==================== */
+function TitleBar() {
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+
+    const setup = async () => {
+      const win = getCurrentWindow();
+      const check = async () => {
+        try {
+          const maximized = await win.isMaximized();
+          if (mounted) setIsMaximized(maximized);
+        } catch (e) {
+          console.warn("isMaximized failed:", e);
+        }
+      };
+      await check();
+      unlisten = await win.onResized(() => { check(); });
+    };
+
+    setup();
+    return () => {
+      mounted = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleMinimize = async () => {
+    await getCurrentWindow().minimize();
+  };
+  const handleToggleMaximize = async () => {
+    await getCurrentWindow().toggleMaximize();
+  };
+  const handleClose = async () => {
+    try { await getCurrentWindow().close(); }
+    catch { await getCurrentWindow().destroy(); }
+  };
+
+  return (
+    <div className="titlebar">
+  <div className="titlebar-drag" data-tauri-drag-region>
+    <svg
+      viewBox="0 0 64 64"
+      width="16"
+      height="16"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ flexShrink: 0 }}
+    >
+      <defs>
+        <linearGradient id="titlebar-brand" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#C4B5FD" />
+          <stop offset="0.5" stopColor="#6EE7B7" />
+          <stop offset="1" stopColor="#FBCFE8" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="16" fill="url(#titlebar-brand)" />
+      <path d="M24 20 L44 32 L24 44 Z" fill="#0B0A0F" stroke="#0B0A0F" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M46 22 A 10 10 0 0 1 54 32" stroke="#0B0A0F" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M54 32 L58 28 M54 32 L50 28" stroke="#0B0A0F" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M18 42 A 10 10 0 0 1 10 32" stroke="#0B0A0F" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M10 32 L6 36 M10 32 L14 36" stroke="#0B0A0F" strokeWidth="3" fill="none" strokeLinecap="round" />
+    </svg>
+    <span className="titlebar-title">VidFlux</span>
+  </div>
+  <div className="titlebar-controls">
+        <button
+          className="titlebar-btn minimize"
+          onClick={handleMinimize}
+          aria-label="Minimize"
+          title="Minimize"
+        >
+          <span className="ms">remove</span>
+        </button>
+        <button
+          className="titlebar-btn maximize"
+          onClick={handleToggleMaximize}
+          aria-label={isMaximized ? "Restore" : "Maximize"}
+          title={isMaximized ? "Restore" : "Maximize"}
+        >
+          <span className="ms">
+            {isMaximized ? "filter_none" : "crop_square"}
+          </span>
+        </button>
+        <button
+          className="titlebar-btn close"
+          onClick={handleClose}
+          aria-label="Close"
+          title="Close"
+        >
+          <span className="ms">close</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ==================== TOP BAR ==================== */
 interface TopBarProps {
   onOpenFiles: () => void;
@@ -654,7 +755,12 @@ function TopBar({
                 <span className="ms" style={{ fontSize: "16px" }}>info</span> About VidFlux
               </div>
               <div className="dropdown-item"
-                onClick={() => { close(); openPath("https://airsilo.pages.dev"); }}>
+                onClick={() => {
+                  close();
+                  openUrl("https://airsilo.pages.dev").catch((e) => {
+                  console.error("Failed to open AirSilo website:", e);
+                });
+                }}>
                 <span className="ms" style={{ fontSize: "16px" }}>language</span> AirSilo Website
               </div>
             </div>
@@ -735,9 +841,13 @@ function App() {
         });
       });
       unComplete = await listen<CompleteEvent>("ffmpeg-complete", (e) => {
-        // If the user already cancelled this job, ignore the FFmpeg exit event.
         const current = useQueueStore.getState().jobs.find((j) => j.id === e.payload.job_id);
-        if (current?.status === "cancelled") {
+        const wasCancelled =
+          current?.status === "cancelled" ||
+          CANCELLED_JOBS.has(e.payload.job_id);
+
+        if (wasCancelled) {
+          CANCELLED_JOBS.delete(e.payload.job_id);
           setRunningJobId(null);
           return;
         }
@@ -921,8 +1031,9 @@ function App() {
 
   async function handleStopAll() {
     if (runningJobId) {
-      // Mark as cancelled FIRST so the ffmpeg-complete handler skips it.
-      updateJob(runningJobId, {
+      const jobIdToCancel = runningJobId;
+      CANCELLED_JOBS.add(jobIdToCancel);
+      updateJob(jobIdToCancel, {
         status: "cancelled",
         error: "Cancelled by user",
         finishedAt: Date.now(),
@@ -930,7 +1041,7 @@ function App() {
       });
       setRunningJobId(null);
       try {
-        await invoke("cancel_conversion", { jobId: runningJobId });
+        await invoke("cancel_conversion", { jobId: jobIdToCancel });
       } catch (e) {
         setError(String(e));
       }
@@ -943,7 +1054,7 @@ function App() {
     const job = jobs.find((j) => j.id === id);
     if (!job) return;
     if (job.status === "running") {
-      // Mark as cancelled FIRST so the ffmpeg-complete handler skips it.
+      CANCELLED_JOBS.add(id);
       updateJob(id, {
         status: "cancelled",
         error: "Cancelled by user",
@@ -1022,15 +1133,17 @@ function App() {
     : `Detected: ${Array.from(new Set(hwEncoders.map((e) => e.vendor.toUpperCase()))).join(", ")}`;
 
   return (
-    <div className="app-shell">
-      <TopBar
-        onOpenFiles={handleSelectFiles} onQuit={handleQuit} onAbout={handleAbout}
-        onStartAll={handleStartAll} onStopAll={handleStopAll}
-        onClearCompleted={clearCompleted} onClearAll={clearAll}
-        onResetSettings={handleResetSettings}
-      />
+  <div className="app-shell">
+    <TitleBar />
+    <TopBar
+      onOpenFiles={handleSelectFiles} onQuit={handleQuit} onAbout={handleAbout}
+      onStartAll={handleStartAll} onStopAll={handleStopAll}
+      onClearCompleted={clearCompleted}
+      onClearAll={clearAll}
+      onResetSettings={handleResetSettings}
+    />
 
-      <div className="workspace">
+    <div className="workspace">
         <aside className="sidebar">
           <div className="brand-block">
             <VidFluxLogo size={36} />
@@ -1039,7 +1152,7 @@ function App() {
                 <span className="brand-name">VidFlux</span>
                 <span className="brand-version">v{APP_VERSION}</span>
               </div>
-            <span className="brand-sub">by AirSilo</span>
+              <span className="brand-sub">by AirSilo</span>
             </div>
           </div>
 
@@ -1205,7 +1318,6 @@ function App() {
                 const showCropToggle = ASPECT_CHANGING_PRESETS.has(job.targetResolution);
 
                 const showReveal = (isDone || (isError && job.outputPath)) && !isRunning;
-                const showRemove = !showReveal || isError;
 
                 return (
                   <div key={job.id} className={`video-row ${job.status}`}>
@@ -1314,13 +1426,11 @@ function App() {
                         </button>
                       )}
 
-                      {showRemove && (
-                        <button className="video-action-btn danger"
-                          title={isRunning ? "Cancel" : "Remove"}
-                          onClick={() => handleRemoveJob(job.id)}>
-                          <span className="ms">{isRunning ? "stop" : "close"}</span>
-                        </button>
-                      )}
+                      <button className="video-action-btn danger"
+                        title={isRunning ? "Cancel" : "Remove"}
+                        onClick={() => handleRemoveJob(job.id)}>
+                        <span className="ms">{isRunning ? "stop" : "close"}</span>
+                      </button>
                     </div>
 
                     {isQueued && isExpanded && job.hasVideo && (
